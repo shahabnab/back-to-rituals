@@ -56,11 +56,6 @@ def binary_entropy(p, eps=1e-8):
     ent = -(p * tf.math.log(p) + (1.0 - p) * tf.math.log(1.0 - p))
     return float(tf.reduce_mean(ent).numpy())
 
-def cons_lambda(epoch,h):
-    if h["CONS_RAMP_EPOCHS"] <= 0:
-        return tf.constant(h["CONS_LAMBDA"], tf.float32)
-    p = tf.cast(tf.minimum(epoch, h["CONS_RAMP_EPOCHS"]), tf.float32) / float(h["CONS_RAMP_EPOCHS"])
-    return tf.cast(h["CONS_LAMBDA"], tf.float32) * p
 
 
 
@@ -297,16 +292,14 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
         train_los_acc = tf.keras.metrics.BinaryAccuracy(name="train_los_acc", threshold=h["METRIC_THRESHOLD"])
         train_los_loss = tf.keras.metrics.Mean(name="train_los_loss")
         train_recon_loss = tf.keras.metrics.Mean(name="train_recon_loss")
-        train_cons_loss   = tf.keras.metrics.Mean(name="train_cons_loss")
-        train_cons_wmean  = tf.keras.metrics.Mean(name="train_cons_wmean")  # avg weight used for KL
+
         ###################################################################################
         val_dom_acc   = tf.keras.metrics.CategoricalAccuracy(name="val_dom_acc")
         val_dom_loss  = tf.keras.metrics.Mean(name="val_dom_loss")
         val_los_acc = tf.keras.metrics.BinaryAccuracy(name="val_los_acc", threshold=h["METRIC_THRESHOLD"])
         val_los_loss  = tf.keras.metrics.Mean(name="val_los_loss")
         val_recon_loss = tf.keras.metrics.Mean(name="val_recon_loss")
-        val_cons_loss     = tf.keras.metrics.Mean(name="val_cons_loss")
-        val_cons_wmean    = tf.keras.metrics.Mean(name="val_cons_wmean")
+
         #################################################################################
         test_dom_acc  = tf.keras.metrics.CategoricalAccuracy(name="test_dom_acc")
         test_los_acc  = tf.keras.metrics.BinaryAccuracy(name="test_los_acc", threshold=h["METRIC_THRESHOLD"])
@@ -317,7 +310,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
 
         @tf.function  # turn on jit_compile=True later only if it shows a real speedup
-        def train_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec, lam_cons):
+        def train_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec):
             with tf.GradientTape() as tape:
                 # Forward
                 pred_rec, pred_dom, pred_los = ae(x, training=True)
@@ -381,44 +374,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
                 total = lw_vec[0] * Lr + lw_vec[1] * Ld + lw_vec[2] * Ll
 
-                # ---- consistency regularization ----
-                Lcons = tf.constant(0.0, tf.float32)
-                cons_w_mean = tf.constant(0.0, tf.float32)
-
-                if cons_lambda:
-                    dom_ids = tf.argmax(y_dom, axis=-1, output_type=tf.int64)     # int64
-                    mask_target = tf.equal(dom_ids, pl_domain_id)                  # (B,)
-
-                    if h.get("CONS_ON", "target_all") == "target_unlabeled":
-                        unlabeled = tf.equal(tf.reshape(sw_los, (-1,)), tf.constant(0.0, tf.float32))
-                        mask_target = mask_target & unlabeled
-
-                    if tf.reduce_any(mask_target):
-                        x_s = strong_aug(x, h["AUG_NOISE_STD"], h["AUG_GAIN_JITTER"])
-
-                        # Teacher logits (stable)
-                        p_teacher = tf.stop_gradient(pred_los)                     # (B,1)
-                        logits_w  = tf.math.log(p_teacher + 1e-6) - tf.math.log(1.0 - p_teacher + 1e-6)
-
-                        # Student logits
-                        logits_s = tf.cast(los_logits_head(x_s, training=True), tf.float32)
-
-                        # confidence weights
-                        conf  = tf.maximum(p_teacher, 1.0 - p_teacher)             # (B,1)
-                        w_cons = tf.pow(conf, tf.cast(h["CONS_CONF_GAMMA"], tf.float32))
-                        mask_f = tf.cast(mask_target, tf.float32)[:, None]
-                        w_cons = w_cons * mask_f                                   # (B,1)
-
-                        cons_w_mean = tf.reduce_sum(w_cons) / (tf.reduce_sum(mask_f) + 1e-8)
-
-                        Lcons = kl_consistency_from_logits(
-                            student_logits=logits_s,
-                            teacher_logits=tf.cast(logits_w, tf.float32),
-                            T=h["CONS_T"],
-                            weight=tf.reshape(w_cons, (-1,))
-                        )
-                        total += tf.cast(lam_cons, tf.float32) * Lcons
-
+            
             # ---- single fused clip (faster) ----
             grads = tape.gradient(total, ae.trainable_variables)
             grads, _ = tf.clip_by_global_norm(grads, 5.0)
@@ -430,9 +386,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             train_dom_loss.update_state(Ld)
             train_los_loss.update_state(Ll)
             train_recon_loss.update_state(Lr)
-            if h["CONS_ENABLE"]:
-                train_cons_loss.update_state(Lcons)
-                train_cons_wmean.update_state(cons_w_mean)
+           
 
             return total
         
@@ -443,7 +397,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
 
         @tf.function# (jit_compile=False)
-        def val_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec, lam_cons):
+        def val_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec):
             # Forward (eval mode)
             pred_rec, pred_dom, pred_los = ae(x, training=False)
             pred_los = tf.clip_by_value(pred_los, 1e-6, 1.0 - 1e-6)
@@ -483,42 +437,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
             total = lw_vec[0]*Lr + lw_vec[1]*Ld + lw_vec[2]*Ll
 
-            # ----- Consistency regularization (eval/monitoring) -----
-            if h["CONS_ENABLE"]:
-                dom_ids = tf.argmax(y_dom, axis=-1, output_type=tf.int32)
-                mask_target = tf.equal(dom_ids, tf.cast(h["PL_DOMAIN_ID"], tf.int32))
-
-                if tf.reduce_any(mask_target):
-                    # Strong aug for student
-                    x_s = strong_aug(x, h["AUG_NOISE_STD"], h["AUG_GAIN_JITTER"])
-                    logits_s = tf.cast(los_logits_head(x_s, training=False), tf.float32)
-
-                    # Teacher logits derived from existing pred_los (saves a forward pass)
-                    # logits_w = logit(p) = log(p) - log(1-p)
-                    logits_w = tf.math.log(pred_los) - tf.math.log(1.0 - pred_los)
-
-                    # Confidence weights
-                    p_w = pred_los  # already clipped
-                    conf = tf.maximum(p_w, 1.0 - p_w)                                  # (B,1)
-                    w_cons = tf.pow(conf, tf.cast(h["CONS_CONF_GAMMA"], tf.float32))   # (B,1)
-                    w_cons = w_cons * tf.cast(mask_target[:, None], tf.float32)        # mask target only
-
-                    Lcons_val = kl_consistency_from_logits(
-                        student_logits=logits_s,
-                        teacher_logits=tf.cast(logits_w, tf.float32),
-                        T=h["CONS_T"],
-                        weight=tf.reshape(w_cons, (-1,))
-                    )
-
-                    # Log the consistency loss and its effective weight mean
-                    val_cons_loss.update_state(Lcons_val)
-                    denom = tf.reduce_sum(tf.cast(mask_target, tf.float32)) + 1e-8
-                    val_cons_wmean.update_state(tf.reduce_sum(w_cons) / denom)
-
-                    # Optionally include in the displayed validation total
-                    
-                    
-                    total += lam_cons * Lcons_val
+  
 
             # Metrics
             val_dom_acc.update_state(y_dom, pred_dom)
@@ -576,29 +495,11 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
             total = lw_vec[0] * Lr + lw_vec[1] * Ld + lw_vec[2] * Ll
 
-            # -------- optional: LOG consistency on test (do NOT add to total) --------
-            # Enable with: h["CONS_ENABLE"]=True and h["CONS_LOG_IN_TEST"]=True
-            if h.get("CONS_ENABLE", False) and h.get("CONS_LOG_IN_TEST", False):
-                dom_ids = tf.argmax(y_dom, axis=-1, output_type=tf.int32)
-                mask_target = tf.equal(dom_ids, tf.cast(h["PL_DOMAIN_ID"], tf.int32))
-                if h.get("CONS_ON", "target_all") == "target_unlabeled":
-                    mask_target = mask_target & tf.equal(tf.reshape(sw_los, (-1,)), 0.0)
 
-                if tf.reduce_any(mask_target):
-                    # student on strong aug, still eval mode in test
-                    x_s = strong_aug(x, h["AUG_NOISE_STD"], h["AUG_GAIN_JITTER"])
-                    logits_s = tf.cast(los_logits_head(x_s, training=False), tf.float32)
 
-                    # teacher logits from existing probs (no extra forward, no tape)
-                    p_teacher = tf.stop_gradient(pred_los)                      # (B,1)
-                    logits_w  = tf.math.log(p_teacher) - tf.math.log(1.0 - p_teacher)
+  
 
-                    # confidence weights
-                    conf  = tf.maximum(p_teacher, 1.0 - p_teacher)              # (B,1)
-                    w_cons = tf.pow(conf, tf.cast(h["CONS_CONF_GAMMA"], tf.float32))
-                    mask_f = tf.cast(mask_target, tf.float32)[:, None]
-                    w_cons = w_cons * mask_f
-
+       
                  
 
             # -------- metrics --------
@@ -627,10 +528,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             "val_loss":[], "val_dom_acc":[], "val_dom_loss":[], "val_los_acc":[], "val_los_loss":[], "val_recon_loss":[],
             "test_loss":[], "test_dom_acc":[], "test_dom_loss":[], "test_los_acc":[], "test_los_loss":[], "test_recon_loss":[],
             "grl_lambda":[],
-            # NEW:
-            "train_cons_loss":[], "val_cons_loss":[],
-            "train_cons_wmean":[], "val_cons_wmean":[],
-            "cons_lambda":[]
+      
         }
 
             
@@ -640,10 +538,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             grl_cb.on_epoch_begin(epoch)
             prog_unfreeze.on_epoch_begin(epoch)
             # at epoch start
-            train_cons_loss.reset_state()
-            train_cons_wmean.reset_state()
-            val_cons_loss.reset_state()
-            val_cons_wmean.reset_state()
+   
 
            
             
@@ -653,7 +548,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
             # linearly interpolate loss weights this epoch
             lw_vec = interp_lw(epoch, h["AE_EPOCHS"])
-          #  print("reconstruction loss weight:", lw_vec[0].numpy(),"domain loss weight:", lw_vec[1].numpy(),"latent loss weight:", lw_vec[2].numpy())
+
 
             # --- train
             train_dom_acc.reset_state()
@@ -665,10 +560,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             train_loss = tf.keras.metrics.Mean()
            # batch_num=0
             #temp_total=0.0
-            if h["CONS_ENABLE"]:
-                lam_cons = cons_lambda(epoch,h) 
-            else:   
-                lam_cons=0  
+            
      
 
             for x, (y_rec, y_dom, y_los), (sw_rec, sw_dom, sw_los) in train_ds:
@@ -676,7 +568,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
                # print("batch_num:", batch_num)
 
                 
-                total = train_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec, lam_cons)
+                total = train_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec)
                 train_loss.update_state(total)
 
             # --- val
@@ -688,7 +580,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             val_loss = tf.keras.metrics.Mean()
             
             for x, (y_rec, y_dom, y_los), (sw_rec, sw_dom, sw_los) in val_ds:
-                 total = val_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec, lam_cons)
+                 total = val_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec)
                  val_loss.update_state(total)
 
 
@@ -733,11 +625,8 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             history["test_recon_loss"].append(float(test_recon_loss.result()))
             history["grl_lambda"].append(float(grl.hp_lambda.numpy()))
 
-            history["train_cons_loss"].append(float(train_cons_loss.result()))
-            history["train_cons_wmean"].append(float(train_cons_wmean.result()))
-            history["val_cons_loss"].append(float(val_cons_loss.result()))
-            history["val_cons_wmean"].append(float(val_cons_wmean.result()))
-            history["cons_lambda"].append(float(lam_cons.numpy()))
+          
+        
 
             val_acc = history["val_los_acc"][-1]
 
@@ -1134,10 +1023,6 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
     val_dom_acc_now = float(history["val_dom_acc"][-1]) if history["val_dom_acc"] else chance
     dom_confusion = 1.0 - abs(val_dom_acc_now - chance) / (1.0 - chance)
 
-    # consistency goodness (optional)
-    val_cons = float(val_cons_loss.result()) if h.get("CONS_ENABLE", False) else 0.0
-    consistency_good = 1.0 / (1.0 + max(val_cons, 0.0))
-
     # FINAL score (fix weights; do NOT tune them as hyperparams)
     optuna_score = (
         0.55 * float(val_auroc)
@@ -1145,7 +1030,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
     - 0.10 * H_bits
     - 0.05 * prev_gap
     + 0.05 * dom_confusion
-    + 0.05 * consistency_good
+
     )  
 
 

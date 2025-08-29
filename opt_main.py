@@ -114,35 +114,10 @@ for DATASET_NAMES, TRAIN_SIZE in zip(dt_names, train_sizes):
         epochs = trial.suggest_int("epochs", 40, 120)
 
         # Pseudo-labeling block (no duplicate 'focal_alpha')
-        if enable_pseudo_labeling:
-            pl_hi = max(8, min(epochs // 2, epochs - 5))
-            h = dict(
-                PL_ENABLE=False,
-                PL_START_EPOCH=pl_hi,
-                PL_UPDATE_EVERY=trial.suggest_int("PL_UPDATE_EVERY", 1, 8),
-                K_EACH=trial.suggest_int("k_each", 50, 400),
-                PL_WEIGHT=trial.suggest_float("pl_weight", 0.5, 2.0),
-            )
-
-            # Consistency regularization — make sure lambda > 0 so KL contributes
-            h.update(dict(
-                CONS_ENABLE=True,
-                CONS_RAMP_EPOCHS=trial.suggest_int("cons_ramp_epochs", 0, max(0, epochs // 3)),
-                CONS_LAMBDA=trial.suggest_float("cons_lambda", 0.05, 1.0),
-                CONS_T=trial.suggest_float("cons_T", 0.5, 2.0),
-                CONS_ON=trial.suggest_categorical("cons_on", ["target_all", "target_unlabeled"]),
-                CONS_CONF_GAMMA=trial.suggest_float("cons_conf_gamma", 1.0, 3.0),
-                AUG_NOISE_STD=trial.suggest_float("aug_noise_std", 0.005, 0.05),
-                AUG_GAIN_JITTER=trial.suggest_float("aug_gain_jitter", 0.0, 0.15),
-                # optional toggles if you want to gate addition (your train_ae currently adds unconditionally)
-                CONS_ADD_TO_TOTAL=True,
-                CONS_IN_VAL_TOTAL=True,
-            ))
-        else:
-            h = dict(PL_ENABLE=False)
+       
 
         # Common hyperparams
-        h.update(dict(
+        h=dict(
             AE_EPOCHS=epochs,
             AE_BATCH=trial.suggest_categorical("AE_BATCH", [16,32, 64, 128]),
             GRL_LAMBDA_MAX=trial.suggest_float("grl_lambda_max", 0.2, 2.0, step=0.1),
@@ -182,7 +157,7 @@ for DATASET_NAMES, TRAIN_SIZE in zip(dt_names, train_sizes):
             w  = trial.suggest_float("w_val_vs_margin", 0.4, 0.8) ,        # weight on val AUROC
             mu = trial.suggest_float("entropy_penalty_mu", 0.0, 0.3)      # tiny penalty strength
 
-        ))
+        )
 
         ae_model, _, val_acc, f1_valid, cm_valid, training_time, f1ent,val_auroc, optuna_score = train_ae(
             balanced_dsets, CIRS, RNG, Domains, Weights, Labels, h=h, trial=trial
