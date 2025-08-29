@@ -873,7 +873,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             tf.cast(ltr_filtered, tf.float32),
             tf.cast(probs_filt,   tf.float32),
             apply_class_balancing=False,
-            alpha=h.get("FOCAL_ALPHA", 0.25),
+            alpha=0.25,#h.get("FOCAL_ALPHA", 0.25),
             gamma=h.get("FOCAL_GAMMA", 2.0),
             from_logits=False,
             label_smoothing=0.0,
@@ -944,7 +944,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             tf.cast(lv_filtered, tf.float32),
             tf.cast(probs_filt, tf.float32),
             apply_class_balancing=False,
-            alpha=h.get("FOCAL_ALPHA", 0.25),
+            alpha=0.25,#h.get("FOCAL_ALPHA", 0.25),
             gamma=h.get("FOCAL_GAMMA", 2.0),
             from_logits=False,
             label_smoothing=0.0,
@@ -1047,7 +1047,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
     
 
-    alpha_focal = h.get("FOCAL_ALPHA", 0.25)
+    alpha_focal = 0.25#h.get("FOCAL_ALPHA", 0.25)
     gamma_focal = h.get("FOCAL_GAMMA", 1.5)
 
     # Probabilities (prob-head) per split
@@ -1179,7 +1179,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
                     "LW_LOS_END": h["LW_LOS_END"],
                     "UNFREEZE_STEP": h["UNFREEZE_STEP"],
                     "METRIC_THRESHOLD": h["METRIC_THRESHOLD"],
-                    "FOCAL_ALPHA": h["FOCAL_ALPHA"],
+                    #"FOCAL_ALPHA": h["FOCAL_ALPHA"],
 
 
 
