@@ -395,7 +395,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
                 pred_rec, pred_dom, pred_los = ae(x, training=True)
 
                 # --- reconstruction and classification losses (unchanged) ---
-                Lr = reconstruction_loss(y_rec, pred_rec, sw_rec)
+                Lr = reconstruction_loss(y_rec, pred_rec)
                 Ll = los_loss(y_los,  pred_los, sw_los)
 
                 # --- CDAN-E: entropy weights for domain loss ---
@@ -403,7 +403,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
                 # CDAN-E weight from task entropy (already in your code)
                 g2  = tf.concat([pred_los, 1.0 - pred_los], axis=-1)        # (B,2)
                 ent = -tf.reduce_sum(g2 * tf.math.log(g2 + 1e-6), axis=-1)  # (B,)
-                w_e = tf.exp(-ent)
+                w_e = tf.cast(tf.exp(-ent), tf.float32)                             # (B,)
                 w_e = tf.stop_gradient(w_e)                                 # (B,)
 
                 # ---- NEW: per-domain weights (0,1,2) -> e.g., make domain 2 twice as heavy
@@ -414,7 +414,8 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
                 # Combine all weights; keep it a vector (B,)
                 sw_dom_vec = tf.reshape(sw_dom, (-1,))                     # base weights (B,)
-                sw_dom_eff = sw_dom_vec * per_dom_w * w_e                  # (B,)
+                sw_dom_eff = sw_dom_vec * per_dom_w * w_e
+
 
                 # Use in domain loss
                 Ld = domain_loss(y_dom, pred_dom, sw_dom_eff)
@@ -496,7 +497,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             pred_rec, pred_dom, pred_los = ae(x, training=False)
 
             # losses
-            Lr = reconstruction_loss(y_rec, pred_rec, sw_rec)
+            Lr = reconstruction_loss(y_rec, pred_rec)
             Ll = los_loss(y_los, pred_los, sw_los)
 
             # CDAN-E: entropy-weighted domain loss
@@ -586,7 +587,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
         def test_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec):
             pred_rec, pred_dom, pred_los = ae(x, training=False)
 
-            Lr = reconstruction_loss(y_rec, pred_rec, sw_rec)
+            Lr = reconstruction_loss(y_rec, pred_rec)
             Ll = los_loss(y_los, pred_los, sw_los)
 
             # CDAN-E: same weighting for comparability
@@ -692,6 +693,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             for x, (y_rec, y_dom, y_los), (sw_rec, sw_dom, sw_los) in test_ds:
                 # use lw_vec or lw_test (see note above)
                 total = test_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec)
+         
                 test_loss.update_state(total)
            
 
