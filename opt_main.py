@@ -111,23 +111,25 @@ for DATASET_NAMES, TRAIN_SIZE in zip(dt_names, train_sizes):
         trial_dir = SAVE_PLOTS_ROOT / f"trial_{trial.number:03d}"
         trial_dir.mkdir(parents=True, exist_ok=True)
 
-        epochs = trial.suggest_int("epochs", 40, 120)
+        epochs = trial.suggest_int("epochs", 30, 40)
+        ENC_CONST_COEF=trial.suggest_float("enc_const", .5, 3.0, step=0.5),
 
         # Pseudo-labeling block (no duplicate 'focal_alpha')
+       
        
 
         # Common hyperparams
         h=dict(
             AE_EPOCHS=epochs,
-            AE_BATCH=trial.suggest_categorical("AE_BATCH", [16,32, 64, 128]),
-            GRL_LAMBDA_MAX=trial.suggest_float("grl_lambda_max", 0.2, 2.0, step=0.1),
+            AE_BATCH=trial.suggest_categorical("AE_BATCH", [16,32, 64]),
+            GRL_LAMBDA_MAX=trial.suggest_float("grl_lambda_max", 0.6, 1.2),
             FOCAL_GAMMA=trial.suggest_float("focal_gamma", 2.0, 3.5),
           
             PL_DOMAIN_ID=2,
-            ENC_CONST_COEF=trial.suggest_categorical("enc_const", [0.5, 1.0, 1.5, 2.0]),
-            DEC_CONST_COEF=trial.suggest_categorical("dec_const", [0.5, 1.0, 1.5, 2.0]),
+            
+            DEC_CONST_COEF=ENC_CONST_COEF,#trial.suggest_categorical("dec_const", [0.5, 1.0, 1.5, 2.0]),
             LATENT_DIM=trial.suggest_categorical("latent_dim", [8, 16, 32, 64, 128]),
-            AE_PATIENCE=trial.suggest_int("ae_patience", 5, 12),
+            AE_PATIENCE=trial.suggest_int("ae_patience", 10, 15),
             COSINE_ALPHA=trial.suggest_float("cosine_alpha", 0.02, 0.30),
             LR_WARMUP_EPOCHS=trial.suggest_categorical("lr_warmup_epochs", [0, 2, 4, 6]),
             BASE_LR=trial.suggest_float("base_lr", 1e-5, 5e-4, log=True),
