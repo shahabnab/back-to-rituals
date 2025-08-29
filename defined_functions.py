@@ -503,7 +503,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             # CDAN-E: entropy-weighted domain loss
             g2  = tf.concat([pred_los, 1.0 - pred_los], axis=-1)         # (B,2)
             ent = -tf.reduce_sum(g2 * tf.math.log(g2 + 1e-6), axis=-1)   # (B,)
-            w_e = 1.0 + tf.exp(-ent)                                     # (B,)
+            w_e = tf.cast(tf.exp(-ent), tf.float32)
             w_e = tf.stop_gradient(w_e)
             # optional: bound weights
             # w_e = tf.clip_by_value(w_e, 0.5, 3.0)
@@ -593,7 +593,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             # CDAN-E: same weighting for comparability
             g2  = tf.concat([pred_los, 1.0 - pred_los], axis=-1)
             ent = -tf.reduce_sum(g2 * tf.math.log(g2 + 1e-6), axis=-1)
-            w_e = 1.0 + tf.exp(-ent)
+            w_e = tf.cast(tf.exp(-ent), tf.float32)
             w_e = tf.stop_gradient(w_e)
             # w_e = tf.clip_by_value(w_e, 0.5, 3.0)
 
