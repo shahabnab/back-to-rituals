@@ -309,7 +309,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
         lw_test = tf.constant([1.0, 1.0, 1.0], tf.float32)
 
 
-        @tf.function  # turn on jit_compile=True later only if it shows a real speedup
+        """ @tf.function  # turn on jit_compile=True later only if it shows a real speedup
         def train_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec):
             with tf.GradientTape() as tape:
                 # Forward
@@ -354,7 +354,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
                 sw_dom_vec = tf.reshape(sw_dom, (-1,))                             # (B,)
                 sw_dom_eff = sw_dom_vec * per_dom_w * w_e                          # (B,)
 
-                """ if DEBUG:
+                if DEBUG:
                     print("Effective domain weights (first 20):", *sw_dom_eff.numpy()[:20])
                     print("g2: ",g2.numpy())
                     print("H: ",H.numpy())
@@ -368,7 +368,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
                     print("target_val: ",target_val.numpy())
                     print("y_dom: ",y_dom.numpy())
                     print("num_dom: ",num_dom)
-                    print("sw_dom_eff: ",sw_dom_eff.numpy()) """
+                    print("sw_dom_eff: ",sw_dom_eff.numpy()) 
 
                 Ld = domain_loss(y_dom, pred_dom, sw_dom_eff)
 
@@ -388,6 +388,48 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
             train_recon_loss.update_state(Lr)
            
 
+            return total """
+        @tf.function
+        def train_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec):
+            with tf.GradientTape() as tape:
+                pred_rec, pred_dom, pred_los = ae(x, training=True)
+
+                # --- reconstruction and classification losses (unchanged) ---
+                Lr = reconstruction_loss(y_rec, pred_rec, sw_rec)
+                Ll = los_loss(y_los,  pred_los, sw_los)
+
+                # --- CDAN-E: entropy weights for domain loss ---
+                # pred_los: (B,1) -> (B,2) probs
+                # CDAN-E weight from task entropy (already in your code)
+                g2  = tf.concat([pred_los, 1.0 - pred_los], axis=-1)        # (B,2)
+                ent = -tf.reduce_sum(g2 * tf.math.log(g2 + 1e-6), axis=-1)  # (B,)
+                w_e = tf.exp(-ent)
+                w_e = tf.stop_gradient(w_e)                                 # (B,)
+
+                # ---- NEW: per-domain weights (0,1,2) -> e.g., make domain 2 twice as heavy
+                DOM_W = tf.constant([1.0, 1.0, 2.0], dtype=tf.float32)      # tune as you like
+
+                # y_dom is one-hot (B, n_domains). Pick the weight for each sample:
+                per_dom_w = tf.reduce_sum(y_dom * DOM_W[tf.newaxis, :], axis=-1)  # (B,)
+
+                # Combine all weights; keep it a vector (B,)
+                sw_dom_vec = tf.reshape(sw_dom, (-1,))                     # base weights (B,)
+                sw_dom_eff = sw_dom_vec * per_dom_w * w_e                  # (B,)
+
+                # Use in domain loss
+                Ld = domain_loss(y_dom, pred_dom, sw_dom_eff)
+
+                total = lw_vec[0]*Lr + lw_vec[1]*Ld + lw_vec[2]*Ll
+
+            grads = tape.gradient(total, ae.trainable_variables)
+            optimizer.apply_gradients(zip(grads, ae.trainable_variables))
+
+            train_dom_acc.update_state(y_dom, pred_dom)
+            train_los_acc.update_state(y_los, pred_los, sample_weight=sw_los)
+            train_dom_loss.update_state(Ld)
+            train_los_loss.update_state(Ll)
+            train_recon_loss.update_state(Lr)
+
             return total
         
 
@@ -396,7 +438,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
 
 
-        @tf.function# (jit_compile=False)
+        """ @tf.function# (jit_compile=False)
         def val_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec):
             # Forward (eval mode)
             pred_rec, pred_dom, pred_los = ae(x, training=False)
@@ -448,6 +490,34 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
           
 
+            return total """
+        @tf.function
+        def val_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec):
+            pred_rec, pred_dom, pred_los = ae(x, training=False)
+
+            # losses
+            Lr = reconstruction_loss(y_rec, pred_rec, sw_rec)
+            Ll = los_loss(y_los, pred_los, sw_los)
+
+            # CDAN-E: entropy-weighted domain loss
+            g2  = tf.concat([pred_los, 1.0 - pred_los], axis=-1)         # (B,2)
+            ent = -tf.reduce_sum(g2 * tf.math.log(g2 + 1e-6), axis=-1)   # (B,)
+            w_e = 1.0 + tf.exp(-ent)                                     # (B,)
+            w_e = tf.stop_gradient(w_e)
+            # optional: bound weights
+            # w_e = tf.clip_by_value(w_e, 0.5, 3.0)
+
+            sw_dom_vec = tf.reshape(sw_dom, (-1,))                        # (B,)
+            sw_dom_eff = sw_dom_vec * w_e                                 # (B,)
+            Ld = domain_loss(y_dom, pred_dom, sw_dom_eff)
+
+            total = lw_vec[0]*Lr + lw_vec[1]*Ld + lw_vec[2]*Ll
+
+            val_dom_acc.update_state(y_dom, pred_dom)
+            val_los_acc.update_state(y_los, pred_los, sample_weight=sw_los)
+            val_dom_loss.update_state(Ld)
+            val_los_loss.update_state(Ll)
+            val_recon_loss.update_state(Lr)
             return total
 
 
@@ -456,7 +526,7 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
 
 
-        @tf.function#(jit_compile=True)
+        """ @tf.function#(jit_compile=True)
         def test_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec):
             # -------- forward (eval mode) --------
             pred_rec, pred_dom, pred_los = ae(x, training=False)
@@ -511,7 +581,34 @@ def train_ae(balanced_dsets, CIRS,RNG, Domains, Weights, LosLabels, h, trial=Non
 
            
 
+            return total """
+        @tf.function
+        def test_step(x, y_rec, y_dom, y_los, sw_rec, sw_dom, sw_los, lw_vec):
+            pred_rec, pred_dom, pred_los = ae(x, training=False)
+
+            Lr = reconstruction_loss(y_rec, pred_rec, sw_rec)
+            Ll = los_loss(y_los, pred_los, sw_los)
+
+            # CDAN-E: same weighting for comparability
+            g2  = tf.concat([pred_los, 1.0 - pred_los], axis=-1)
+            ent = -tf.reduce_sum(g2 * tf.math.log(g2 + 1e-6), axis=-1)
+            w_e = 1.0 + tf.exp(-ent)
+            w_e = tf.stop_gradient(w_e)
+            # w_e = tf.clip_by_value(w_e, 0.5, 3.0)
+
+            sw_dom_vec = tf.reshape(sw_dom, (-1,))
+            sw_dom_eff = sw_dom_vec * w_e
+            Ld = domain_loss(y_dom, pred_dom, sw_dom_eff)
+
+            total = lw_vec[0]*Lr + lw_vec[1]*Ld + lw_vec[2]*Ll
+
+            test_dom_acc.update_state(y_dom, pred_dom)
+            test_los_acc.update_state(y_los, pred_los, sample_weight=sw_los)
+            test_dom_loss.update_state(Ld)
+            test_los_loss.update_state(Ll)
+            test_recon_loss.update_state(Lr)
             return total
+
 
         
         
